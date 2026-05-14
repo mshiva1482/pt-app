@@ -372,6 +372,41 @@ img { display: block; max-width: 100%; }
 }
 .food-card.checked .food-protein { color: var(--color-primary); }
 
+.food-delete {
+  position: absolute;
+  bottom: var(--space-3);
+  right: var(--space-3);
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition), background var(--transition);
+  padding: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+.food-card:hover .food-delete,
+.food-card:focus-within .food-delete {
+  opacity: 1;
+}
+.food-delete:hover {
+  color: var(--color-notification, #a13544);
+  background: rgba(161,53,68,0.12);
+}
+.food-delete:active { transform: scale(0.88); }
+
+/* On touch devices always show delete */
+@media (hover: none) {
+  .food-delete { opacity: 0.45; }
+}
+
+
 /* === CUSTOM FOOD === */
 .add-food-row {
   margin-bottom: var(--space-6);
@@ -627,7 +662,7 @@ img { display: block; max-width: 100%; }
     </div>
   </div>
 
-  <div class="reset-note">Resets automatically each day ↺</div>
+  <div class="reset-note" id="resetNote">Resets automatically at midnight ↺</div>
 </div>
 
 <script>
@@ -648,13 +683,47 @@ const DEFAULT_FOODS = [
 ];
 
 // ===== STATE =====
-let state = {
-  goal: 150,
-  foods: JSON.parse(JSON.stringify(DEFAULT_FOODS)),
-  checked: {},  // id -> true
-  theme: 'dark',
-  nextId: 100,
-};
+function getTodayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + (d.getMonth()+1) + '-' + d.getDate();
+}
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem('proteinTracker');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // If saved data is from today, restore it; otherwise start fresh
+      if (parsed.date === getTodayKey()) {
+        return {
+          goal:   parsed.goal   ?? 150,
+          foods:  parsed.foods  ?? JSON.parse(JSON.stringify(DEFAULT_FOODS)),
+          checked:parsed.checked?? {},
+          theme:  parsed.theme  ?? 'dark',
+          nextId: parsed.nextId ?? 100,
+        };
+      }
+    }
+  } catch(e) {}
+  return {
+    goal: 150,
+    foods: JSON.parse(JSON.stringify(DEFAULT_FOODS)),
+    checked: {},
+    theme: 'dark',
+    nextId: 100,
+  };
+}
+
+function saveState() {
+  try {
+    localStorage.setItem('proteinTracker', JSON.stringify({
+      ...state,
+      date: getTodayKey(),
+    }));
+  } catch(e) {}
+}
+
+let state = loadState();
 
 // ===== THEME =====
 const html = document.documentElement;
@@ -664,6 +733,7 @@ const themeIcon = document.getElementById('themeIcon');
 function setTheme(t) {
   state.theme = t;
   html.setAttribute('data-theme', t);
+  saveState();
   themeIcon.innerHTML = t === 'dark'
     ? '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
     : '<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
@@ -753,8 +823,21 @@ function renderGrid() {
       <div class="food-emoji">${food.emoji}</div>
       <div class="food-name">${food.name}</div>
       <div class="food-protein">${food.protein}g protein</div>
+      <button class="food-delete" aria-label="Remove ${food.name}" title="Remove">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/>
+        </svg>
+      </button>
     `;
-    card.addEventListener('click', () => toggleFood(food.id));
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.food-delete')) return;
+      toggleFood(food.id);
+    });
+    const delBtn = card.querySelector('.food-delete');
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteFood(food.id);
+    });
     grid.appendChild(card);
   });
 }
@@ -768,6 +851,19 @@ function toggleFood(id) {
   renderGrid();
   renderLog();
   updateProgress();
+  saveState();
+}
+
+
+function deleteFood(id) {
+  // Remove from foods list
+  state.foods = state.foods.filter(f => f.id !== id);
+  // Remove from checked if it was checked
+  delete state.checked[id];
+  renderGrid();
+  renderLog();
+  updateProgress();
+  saveState();
 }
 
 // ===== LOG =====
@@ -807,6 +903,7 @@ document.getElementById('clearAll').addEventListener('click', () => {
   renderGrid();
   renderLog();
   updateProgress();
+  saveState();
 });
 
 // ===== GOAL EDITOR =====
@@ -827,6 +924,7 @@ goalSave.addEventListener('click', () => {
     state.goal = v;
     updateProgress();
     goalEditor.classList.remove('open');
+    saveState();
   }
 });
 
@@ -855,6 +953,7 @@ addFoodSave.addEventListener('click', () => {
   document.getElementById('newFoodEmoji').value = '';
   addFoodForm.classList.remove('open');
   renderGrid();
+  saveState();
 });
 
 // Enter key shortcuts
@@ -866,10 +965,19 @@ goalInput.addEventListener('keydown', e => {
 });
 
 // ===== INIT =====
-setTheme('dark');
+setTheme(state.theme);
 renderGrid();
 renderLog();
 updateProgress();
+
+// Show last reset date in footer
+const resetNote = document.getElementById('resetNote');
+const saved = (() => { try { return JSON.parse(localStorage.getItem('proteinTracker')); } catch(e){} return null; })();
+if (saved && saved.date !== getTodayKey()) {
+  resetNote.textContent = 'Fresh start — last session was ' + saved.date + ' ↺';
+} else {
+  resetNote.textContent = 'Resets automatically at midnight ↺';
+}
 </script>
 </body>
 </html>
